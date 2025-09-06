@@ -493,8 +493,43 @@ namespace tr::pod
 			switch(version)
 			{
 				case pod1:
+					{
+						archive<pod1>::header* pod1_hdr = reinterpret_cast<archive<pod1>::header*>(&data[0]);
+						entries.resize(pod1_hdr->entry_count);
+						archive<pod1>::entry* dict = reinterpret_cast<archive<pod1>::entry*>(&data[sizeof(archive<pod1>::header)]);
+
+						for(uint32_t i = 0; i < pod1_hdr->entry_count; i++)
+						{
+							entries[i].name      = pod::string::gets(dict[i].name);
+							entries[i].offset    = dict[i].offset;
+							entries[i].timestamp = -1; // POD1 doesn't have timestamps
+							entries[i].checksum  = -1; // POD1 doesn't have checksums
+							entries[i].size      = dict[i].size;
+							entries[i].data      = &data[entries[i].offset];
+						}
+						print();
+					}
 					break;
 				case pod2:
+					{
+						archive<pod2>::header* pod2_hdr = reinterpret_cast<archive<pod2>::header*>(&data[0]);
+						entries.resize(pod2_hdr->entry_count);
+						archive<pod2>::entry* dict = reinterpret_cast<archive<pod2>::entry*>(&data[sizeof(archive<pod2>::header)]);
+						
+						// Names are stored after the entries directory
+						size_t names_start = sizeof(archive<pod2>::header) + pod2_hdr->entry_count * sizeof(archive<pod2>::entry);
+
+						for(uint32_t i = 0; i < pod2_hdr->entry_count; i++)
+						{
+							entries[i].name      = pod::string::gets(reinterpret_cast<char*>(&data[names_start + dict[i].names_offset]));
+							entries[i].offset    = dict[i].offset;
+							entries[i].timestamp = dict[i].timestamp;
+							entries[i].checksum  = dict[i].checksum;
+							entries[i].size      = dict[i].size;
+							entries[i].data      = &data[entries[i].offset];
+						}
+						print();
+					}
 					break;
 				case epd1:
 				case epd2:
@@ -509,7 +544,7 @@ namespace tr::pod
 						entries.resize(hdr->entry_count);
 						archive<pod3>::entry* dict = reinterpret_cast<archive<pod3>::entry*>(&data[hdr->entry_offset]);
 
-						if(hdr->checksum_verify(&data[0]) && hdr->entries_verify(&data[0]) && hdr->depends_verify(&data[0]) && hdr->audits_verify(&data[0]))
+						if(!hdr->checksum_verify(&data[0]) || !hdr->entries_verify(&data[0]) || !hdr->depends_verify(&data[0]) || !hdr->audits_verify(&data[0]))
 							printf("[ERR] POD3/4/5 checksum verification failed for %s!\n", name.c_str());
 
 						for(uint32_t i = 0; i < hdr->entry_count; i++)
@@ -538,12 +573,30 @@ namespace tr::pod
 			printf("[NFO] %s checksum   offset          size name\n\n", pod::string::ctime(&timestamp));
 			for(uint32_t i = 0; i < entries.size(); i++)
 				printf("[ENT] %s %.8X %.8X %13u %s\n", pod::string::ctime(&entries[i].timestamp), entries[i].checksum, entries[i].offset, entries[i].size, entries[i].name);
-			if(pod::audit::visible)
-				for(uint32_t i = 0; i < hdr->audit_count; i++)
-					printf("%s\n", pod::audit::print(reinterpret_cast<struct audit::entry*>(&data[hdr->audits_offset()])[i]));
-			printf("\n[HDR] %s %.8X %.8X %13zu %s %s %s %s\n", pod::string::ctime(&timestamp), hdr->checksum, 0, sizeof(struct pod::archive<pod3>::header), pod::ident[pod::id(hdr->ident)].first, hdr->comment, hdr->author, hdr->copyright);
-			printf("[FLE] %s %.8X %.8X %13u %s\n", pod::string::ctime(&timestamp), checksum, 0, size, name.c_str());
-			printf("[CNT] %s %.8X %.8X %13u %u %u\n\n\n", pod::string::ctime(&timestamp), -1, -1, hdr->entry_count, hdr->depends_count, hdr->audit_count);
+			
+			if(version == pod1)
+			{
+				archive<pod1>::header* pod1_hdr = reinterpret_cast<archive<pod1>::header*>(&data[0]);
+				printf("\n[HDR] %s %.8X %.8X %13zu %s %s\n", pod::string::ctime(&timestamp), (uint32_t)-1, 0, sizeof(struct pod::archive<pod1>::header), pod::ident[version].first, pod1_hdr->comment);
+				printf("[FLE] %s %.8X %.8X %13u %s\n", pod::string::ctime(&timestamp), checksum, 0, size, name.c_str());
+				printf("[CNT] %s %.8X %.8X %13u %u %u\n\n\n", pod::string::ctime(&timestamp), -1, -1, pod1_hdr->entry_count, 0u, 0u);
+			}
+			else if(version == pod2)
+			{
+				archive<pod2>::header* pod2_hdr = reinterpret_cast<archive<pod2>::header*>(&data[0]);
+				printf("\n[HDR] %s %.8X %.8X %13zu %s %s\n", pod::string::ctime(&timestamp), pod2_hdr->checksum, 0, sizeof(struct pod::archive<pod2>::header), pod::ident[version].first, pod2_hdr->comment);
+				printf("[FLE] %s %.8X %.8X %13u %s\n", pod::string::ctime(&timestamp), checksum, 0, size, name.c_str());
+				printf("[CNT] %s %.8X %.8X %13u %u %u\n\n\n", pod::string::ctime(&timestamp), -1, -1, pod2_hdr->entry_count, 0u, pod2_hdr->audit_count);
+			}
+			else if(hdr)
+			{
+				if(pod::audit::visible)
+					for(uint32_t i = 0; i < hdr->audit_count; i++)
+						printf("%s\n", pod::audit::print(reinterpret_cast<struct audit::entry*>(&data[hdr->audits_offset()])[i]));
+				printf("\n[HDR] %s %.8X %.8X %13zu %s %s %s %s\n", pod::string::ctime(&timestamp), hdr->checksum, 0, sizeof(struct pod::archive<pod3>::header), pod::ident[pod::id(hdr->ident)].first, hdr->comment, hdr->author, hdr->copyright);
+				printf("[FLE] %s %.8X %.8X %13u %s\n", pod::string::ctime(&timestamp), checksum, 0, size, name.c_str());
+				printf("[CNT] %s %.8X %.8X %13u %u %u\n\n\n", pod::string::ctime(&timestamp), -1, -1, hdr->entry_count, hdr->depends_count, hdr->audit_count);
+			}
 		}
 		~file() {  }
 		enum version verify_file()
